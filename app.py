@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 
 st.set_page_config(page_title="سیستم انتخاب سخنران", layout="centered")
 
-# اعمال فونت فارسی Tahoma
+# استایل فارسی
 st.markdown("""
     <style>
     * {
@@ -12,68 +13,84 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("سیستم انتخاب سخنران بر اساس ۸ شاخص")
+st.title("سیستم انتخاب سخنران بر پایه مدل AHP")
 
 # شاخص‌ها
-criteria = {
-    "پژوهشگر": 1.0,
-    "صنعت": 1.0,
-    "آموزش‌دهنده": 1.0,
-    "سیاست‌گذار": 1.0,
-    "ارتباطات متقابل": 1.0,
-    "رسانه‌ای": 1.0,
-    "رسانه اجتماعی": 1.0,
-    "احساس عمومی": 1.0,
-}
+criteria = [
+    "پژوهشگر",
+    "صنعت",
+    "آموزش‌دهنده",
+    "سیاست‌گذار",
+    "ارتباطات متقابل",
+    "رسانه‌ای",
+    "رسانه اجتماعی",
+    "احساس عمومی"
+]
 
-# تنظیم وزن شاخص‌ها
-st.sidebar.header("تنظیم وزن شاخص‌ها")
-for key in criteria:
-    criteria[key] = st.sidebar.slider(key, 0.0, 2.0, 1.0, 0.1)
+# ورود وزن‌ها توسط کاربر
+st.sidebar.header("وزن شاخص‌ها بر اساس مدل AHP")
+weights = []
+for crit in criteria:
+    w = st.sidebar.slider(f"{crit}", 0.0, 1.0, 0.125, 0.01)
+    weights.append(w)
 
-num_speakers = st.number_input("چند سخنران برای مقایسه دارید؟", min_value=1, max_value=10, value=3)
+# نرمال‌سازی وزن‌ها
+weights = np.array(weights)
+weights = weights / np.sum(weights)
+
+num_speakers = st.number_input("تعداد سخنران‌ها برای مقایسه", min_value=1, max_value=10, value=3)
 
 speakers = []
 
-st.subheader("امتیازدهی به سخنران‌ها")
+st.subheader("امتیازدهی به سخنران‌ها (۰ تا ۱۰)")
 
-# ورود امتیاز برای هر سخنران
 for i in range(num_speakers):
     with st.expander(f"سخنران {i+1}"):
         name = st.text_input(f"نام سخنران {i+1}", key=f"name_{i}")
-        scores = {}
+        scores = []
         for crit in criteria:
-            scores[crit] = st.slider(f"{crit}", 0, 10, 5, key=f"{crit}_{i}")
+            score = st.slider(f"{crit}", 0, 10, 5, key=f"{crit}_{i}")
+            scores.append(score)
         speakers.append({"name": name, "scores": scores})
 
-# دکمه تحلیل
 if st.button("تحلیل و رتبه‌بندی"):
+    max_score = 10 * len(criteria)
     results = []
 
-    max_score = sum([10 * weight for weight in criteria.values()])  # امتیاز نهایی ممکن (بر اساس وزن‌ها)
-
     for speaker in speakers:
-        name = speaker["name"]
-        weighted_score = sum(speaker["scores"][crit] * criteria[crit] for crit in criteria)
-        score_out_of_100 = round(weighted_score / max_score * 100, 2)
-        results.append({"نام": name, "امتیاز نهایی (از 100)": score_out_of_100})
+        weighted_score = np.dot(speaker["scores"], weights)
+        score_out_of_100 = round((weighted_score / 10) * 100, 2)
+        results.append({
+            "نام": speaker["name"],
+            "امتیاز نهایی (از ۱۰۰)": score_out_of_100,
+            "raw_scores": speaker["scores"]
+        })
 
-    df = pd.DataFrame(results).sort_values("امتیاز نهایی (از 100)", ascending=False)
+    df = pd.DataFrame(results).sort_values("امتیاز نهایی (از ۱۰۰)", ascending=False).reset_index(drop=True)
+    df.index = df.index + 1  # رتبه‌ها از ۱ شروع شود
+    df.insert(0, "رتبه", df.index)
 
     st.success("رتبه‌بندی نهایی:")
-    st.dataframe(df)
-    st.bar_chart(df.set_index("نام"))
+    st.dataframe(df[["رتبه", "نام", "امتیاز نهایی (از ۱۰۰)"]])
+    st.bar_chart(df.set_index("نام")["امتیاز نهایی (از ۱۰۰)"])
 
     # تحلیل گزینه برتر
-    top_speaker = df.iloc[0]
-    top_speaker_name = top_speaker["نام"]
+    top = df.iloc[0]
+    top_name = top["نام"]
+    top_scores = df.iloc[0]["raw_scores"]
 
-    for speaker in speakers:
-        if speaker["name"] == top_speaker_name:
-            st.markdown("### تحلیل گزینه برتر")
-            for crit, score in speaker["scores"].items():
-                if score >= 7:
-                    st.markdown(f"در شاخص {crit} عملکرد بسیار خوبی دارد.")
-                elif score <= 3:
-                    st.markdown(f"در شاخص {crit} نیاز به بهبود دارد.")
-            st.markdown(f"با توجه به مجموع امتیازها، گزینه پیشنهادی برای سخنرانی {top_speaker_name} است با امتیاز {top_speaker['امتیاز نهایی (از 100)']} از ۱۰۰.")
+    st.markdown("### تحلیل گزینه برتر")
+
+    for crit, val in zip(criteria, top_scores):
+        if val < 3:
+            st.markdown(f"در شاخص {crit} تجربه ارزشمندی دیده نشد.")
+        elif val < 5:
+            st.markdown(f"در شاخص {crit} امتیاز خوبی بدست آورده است.")
+        elif val < 7:
+            st.markdown(f"در شاخص {crit} امتیاز رو به بالا کسب کرده است.")
+        elif val < 10:
+            st.markdown(f"در شاخص {crit} عملکرد بسیار خوبی داشته است.")
+        elif val == 10:
+            st.markdown(f"در شاخص {crit} امتیاز عالی و کاملی را بدست آورده است.")
+
+    st.markdown(f"امتیاز نهایی این سخنران {top['امتیاز نهایی (از ۱۰۰)']} از ۱۰۰ است و به عنوان گزینه پیشنهادی انتخاب می‌شود.")
